@@ -1,0 +1,164 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// This file defines entire database structure
+// Every table, column, relationship, and index lives here.
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ————— User ————————————————————————————————————————
+// Stores everyone who logs in via GitHub OAuth
+// githubId is  the stable identifier — GitHub login (username) can change.
+
+model User {
+  id          String   @id @default(cuid())
+  githubId    Int      @unique
+  githubLogin String
+  email       String?
+  avatarUrl   String
+  plan        Plan     @default(FREE)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  installations Installation[]
+
+  @@map("users")
+}
+
+// ————— Installation ————————————————————————————————————————
+// When a user installs our GitHub App on their account or org,
+// GitHub gives us an installationId we use to access their repos.
+// One user can install on multiple orgs.
+
+model Installation {
+  id             String      @id @default(cuid())
+  installationId Int         @unique
+  accountLogin   String
+  accountType    AccountType
+  createdAt      DateTime    @default(now())
+
+  owner        User         @relation(fields: [ownerId], references: [id])
+  ownerId      String
+  repositories Repository[]
+
+  @@map("installations")
+}
+
+// ————— Repository ————————————————————————————————————————
+// A GitHub repo that has CodeLens AI active.
+// settings stores per-repo configuration as JSON.
+
+model Repository {
+  id           String   @id @default(cuid())
+  githubRepoId Int      @unique
+  fullName     String
+  language     String?
+  isActive     Boolean  @default(true)
+  settings     Json     @default("{}")
+  createdAt    DateTime @default(now())
+
+  installation   Installation @relation(fields: [installationId], references: [id])
+  installationId String
+  reviews        Review[]
+
+  @@map("repositories")
+}
+
+// ————— Review ————————————————————————————————————————
+// One row per PR review session.
+// A PR can be reviewed multiple times (e.g. when a new commits are pushed).
+
+model Review {
+  id            String       @id @default(cuid())
+  prNumber      Int
+  prTitle       String
+  prAuthor      String
+  commitSha     String
+  status        ReviewStatus @default(PENDING)
+  overallScore  Int?
+  filesReviewed Int          @default(0)
+  tokensUsed    Int          @default(0)
+  durationMs    Int?
+  summary       String?      @db.Text
+  createdAt     DateTime     @default(now())
+  completedAt   DateTime?
+
+  repository   Repository @relation(fields: [repositoryId], references: [id])
+  repositoryId String
+  findings     Finding[]
+
+  @@unique([repositoryId, prNumber, commitSha])
+  @@map("reviews")
+}
+
+// ————— Finding ————————————————————————————————————————
+// Individual issues found by the AI within a review
+// One review can have many findings across many files.
+
+model Finding {
+  id              String   @id @default(cuid())
+  filePath        String
+  lineStart       Int?
+  lineEnd         Int?
+  severity        Severity
+  category        Category
+  title           String
+  description     String   @db.Text
+  suggestion      String?  @db.Text
+  codeSnippet     String?  @db.Text
+  language        String?
+  ruleId          String?
+  githubCommentId Int?
+  createdAt       DateTime @default(now())
+
+  review   Review @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  reviewId String
+
+  @@map("findings")
+}
+
+// ————— Enums ————————————————————————————————————————
+// Using enums instead of plain strings gives us:
+// 1. database-level validation (can't insert invalid values)
+// 2. TypeScript autocomplete and type checking
+// 3. Self-documenting schema
+
+enum Plan {
+  FREE
+  PRO
+}
+
+enum AccountType {
+  USER
+  ORGANIZATION
+}
+
+enum ReviewStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum Severity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  INFO
+}
+
+enum Category {
+  BUG
+  SECURITY
+  PERFORMANCE
+  STYLE
+  MAINTAINABILITY
+}
