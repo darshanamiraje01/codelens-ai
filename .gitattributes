@@ -1,0 +1,11 @@
+# .gitattributes
+# Force consistent line endings across all OS
+* text=auto eol-lf
+
+# Explicitly declare binary files to prevent corruption
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+.*ico binary
+*.pdf binary
