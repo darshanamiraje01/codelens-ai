@@ -21,8 +21,18 @@ export const proxy = auth;
 // matcher tells Next.js which routes this middleware applies to.
 // We exclude static files and Next.js internals for performance —
 // there's no point running auth checks on image requests.
+
+// matcher tells Next.js which routes this proxy applies to.
+// We exclude:
+//   - api/auth        → NextAuth's own routes (login/callback/session)
+//   - api/webhooks     → GitHub webhook events — these authenticate via
+//                        HMAC signature verification, NOT user sessions.
+//                        GitHub is a server, not a logged-in human.
+//   - _next/static     → built JS/CSS assets
+//   - _next/image      → Next.js image optimization
+//   - favicon.ico, *.png → static files
 export const config = {
   matcher: [
-    "/((?!api/auth|_next/static|_next/image|favicon.ico|.*\\.png$).*)",
+    "/((?!api/auth|api/webhooks|_next/static|_next/image|favicon.ico|.*\\.png$).*)",
   ],
 };
