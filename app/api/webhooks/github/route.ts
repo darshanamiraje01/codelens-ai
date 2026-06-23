@@ -1,27 +1,23 @@
 // app/api/webhooks/github/route.ts
 // Receives GitHub webhook events for our GitHub App.
 //
-// Security: every request is verified using HMAC-SHA256 before
-// any processing happens. This proves the request genuinely came
-// from GitHub and wasn't forged by an attacker.
-//
-// Speed: GitHub expects a response within 10 seconds or it considers
-// the delivery failed and will retry. We do minimal work here and
-// will push heavy processing (AI review) onto a background queue
-// in a later task.
+// Design principle: do as little work as possible here.
+// Verify the signature, parse the payload, push to queue, respond.
+// All heavy processing happens in the background worker.
 
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "node:crypto";
+import { reviewQueue } from "@/lib/queue";
+import type { ReviewJobPayload } from "@/types";
+
+// Actions that should trigger a code review
+const TRIGGER_ACTIONS = ["opened", "synchronize", "reopened"] as const;
 
 export async function POST(request: NextRequest) {
-  // ─── Step 1: Read the raw request body ─────────────────────────────────────
-  // We need the RAW (unparsed) body text for signature verification —
-  // HMAC is computed over the exact bytes GitHub sent. If we parsed
-  // to JSON first and re-serialized, formatting differences could
-  // cause valid signatures to fail.
+  // ─── Step 1: Read raw body for HMAC verification ───────────────────────────
   const rawBody = await request.text();
 
-  // ─── Step 2: Verify the HMAC-SHA256 signature ──────────────────────────────
+  // ─── Step 2: Verify HMAC-SHA256 signature ──────────────────────────────────
   const signature = request.headers.get("x-hub-signature-256");
   const isValid = await verifyWebhookSignature(
     rawBody,
@@ -34,45 +30,59 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
   }
 
-  // ─── Step 3: Identify the event type ───────────────────────────────────────
-  // GitHub sends the event type in a header, not the body.
+  // ─── Step 3: Identify event type ───────────────────────────────────────────
   const eventType = request.headers.get("x-github-event");
 
-  // ─── Step 4: Parse the JSON payload ────────────────────────────────────────
+  // ─── Step 4: Parse payload ─────────────────────────────────────────────────
   const payload = JSON.parse(rawBody);
 
-  // ─── Step 5: Log what we received (temporary — proves the pipeline works) ──
-  console.log("=== WEBHOOK RECEIVED ===");
-  console.log("Event type:", eventType);
-  console.log("Action:", payload.action);
-  console.log("Repository:", payload.repository?.full_name);
-  if (eventType === "pull_request") {
-    console.log("PR number:", payload.pull_request?.number);
-    console.log("PR title:", payload.pull_request?.title);
+  // ─── Step 5: Filter — only process pull_request events ─────────────────────
+  if (eventType !== "pull_request") {
+    // We subscribed only to pull_request events in GitHub App settings,
+    // but GitHub also sends a "ping" event when you first configure
+    // the webhook — we silently accept everything else with 200
+    console.log(`Ignoring event type: ${eventType}`);
+    return NextResponse.json({ received: true }, { status: 200 });
   }
 
-  // ─── Step 6: Respond immediately ───────────────────────────────────────────
-  // We MUST respond quickly. Heavy processing (queueing, AI calls)
-  // will be added in upcoming tasks — never done synchronously here.
-  return NextResponse.json({ received: true }, { status: 200 });
+  // ─── Step 6: Filter — only trigger on relevant PR actions ──────────────────
+  const action = payload.action as string;
+  if (!TRIGGER_ACTIONS.includes(action as typeof TRIGGER_ACTIONS[number])) {
+    // Actions like "closed", "labeled", "assigned" don't need review
+    console.log(`Ignoring pull_request action: ${action}`);
+    return NextResponse.json({ received: true }, { status: 200 });
+  }
+
+  // ─── Step 7: Build the job payload ─────────────────────────────────────────
+  const jobPayload: ReviewJobPayload = {
+    installationId: payload.installation?.id,
+    repoFullName: payload.repository.full_name,
+    prNumber: payload.pull_request.number,
+    prTitle: payload.pull_request.title,
+    prAuthor: payload.pull_request.user.login,
+    commitSha: payload.pull_request.head.sha,
+    diffUrl: payload.pull_request.diff_url,
+  };
+
+  // ─── Step 8: Push to queue ─────────────────────────────────────────────────
+  // This is fast — just a Redis write, not actual processing
+  const job = await reviewQueue.add("review-pr", jobPayload, {
+    // Use repo+PR+commit as a deduplication key — if the exact same
+    // commit fires multiple webhooks (e.g. GitHub retries), we won't
+    // process it twice
+    jobId: `${jobPayload.repoFullName}-${jobPayload.prNumber}-${jobPayload.commitSha}`,
+  });
+
+  console.log(`✓ Queued review job ${job.id} for PR #${jobPayload.prNumber} in ${jobPayload.repoFullName}`);
+
+  // ─── Step 9: Respond immediately ───────────────────────────────────────────
+  return NextResponse.json(
+    { received: true, jobId: job.id },
+    { status: 200 }
+  );
 }
 
 // ─── HMAC-SHA256 Signature Verification ──────────────────────────────────────
-//
-// GitHub signs every webhook payload using a secret only we share with it.
-// The signature arrives in the x-hub-signature-256 header, formatted as:
-//   sha256=<hex-encoded-hmac>
-//
-// We recompute the same HMAC ourselves using our copy of the secret,
-// then compare. If they match, the request is authentic.
-//
-// We use crypto.timingSafeEqual() instead of === for the comparison.
-// A normal string comparison (===) short-circuits on the first
-// mismatched character, which means comparison time varies based on
-// how many characters match. An attacker could theoretically measure
-// these timing differences to guess the correct signature one byte
-// at a time. timingSafeEqual() always takes the same amount of time
-// regardless of where the mismatch occurs, eliminating this attack vector.
 async function verifyWebhookSignature(
   body: string,
   signature: string | null,
@@ -84,7 +94,6 @@ async function verifyWebhookSignature(
     "sha256=" +
     crypto.createHmac("sha256", secret).update(body).digest("hex");
 
-  // Both buffers must be the same length for timingSafeEqual to work
   if (signature.length !== expectedSignature.length) {
     return false;
   }
