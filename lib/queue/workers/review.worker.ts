@@ -83,16 +83,38 @@ async function processReviewJob(job: Job<ReviewJobPayload>): Promise<void> {
   }
 
   // ─── Step 2: Create review record ─────────────────────────────────────────
-  const review = await prisma.review.create({
-    data: {
+  // ─── Step 2: Create or update review record ───────────────────────────────
+// We use upsert instead of create to handle re-reviews of the same PR.
+// A user may manually trigger a review on a PR that was already reviewed
+// at the same commit — upsert handles this gracefully by updating the
+// existing record rather than throwing a unique constraint error.
+const review = await prisma.review.upsert({
+  where: {
+    repositoryId_prNumber_commitSha: {
       repositoryId: repoRecord.id,
       prNumber,
-      prTitle,
-      prAuthor,
       commitSha,
-      status: "PROCESSING",
     },
-  });
+  },
+  create: {
+    repositoryId: repoRecord.id,
+    prNumber,
+    prTitle,
+    prAuthor,
+    commitSha,
+    status: "PROCESSING",
+  },
+  update: {
+    // Reset status and clear previous results for re-review
+    status: "PROCESSING",
+    overallScore: null,
+    filesReviewed: 0,
+    tokensUsed: 0,
+    durationMs: null,
+    summary: null,
+    completedAt: null,
+  },
+});
 
   console.log(`✓ Created review record: ${review.id}`);
 

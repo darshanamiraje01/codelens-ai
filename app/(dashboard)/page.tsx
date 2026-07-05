@@ -3,6 +3,7 @@ import { StatsCards } from "@/components/dashboard/StatsCards";
 import { RecentReviews } from "@/components/dashboard/RecentReviews";
 import { ScoreTrendChart } from "@/components/dashboard/ScoreTrendChart";
 import { SeverityBreakdown } from "@/components/dashboard/SeverityBreakdown";
+import { TriggerReview } from "@/components/dashboard/TriggerReview";
 import prisma from "@/lib/db";
 
 async function getDashboardData() {
@@ -14,6 +15,7 @@ async function getDashboardData() {
     avgScoreResult,
     allCompletedReviews,
     findingsBySeverity,
+    repositories,
   ] = await Promise.all([
     prisma.review.count(),
     prisma.review.count({ where: { status: "COMPLETED" } }),
@@ -42,6 +44,11 @@ async function getDashboardData() {
     prisma.finding.groupBy({
       by: ["severity"],
       _count: { severity: true },
+    }),
+    prisma.repository.findMany({
+      where: { isActive: true },
+      select: { fullName: true },
+      orderBy: { createdAt: "desc" },
     }),
   ]);
 
@@ -72,6 +79,7 @@ async function getDashboardData() {
     avgScore,
     trendData,
     severityData,
+    repositories,
   };
 }
 
@@ -105,6 +113,8 @@ export default async function DashboardPage() {
           <SeverityBreakdown data={data.severityData} />
         </div>
       </div>
+      {/* Manual trigger */}
+      <TriggerReview repositories={data.repositories} />
 
       <RecentReviews reviews={data.recentReviews} />
     </div>
