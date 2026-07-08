@@ -145,7 +145,7 @@ export default async function ReviewsPage() {
                     >
                       <TableCell>
                         <Link href={`/reviews/${review.id}`}>
-                          <p className="font-medium text-sm hover:text-primary transition-colors truncate max-w-[200px]">
+                          <p className="font-medium text-sm hover:text-primary transition-colors truncate max-w-50">
                             {review.prTitle}
                           </p>
                           <p className="text-xs text-muted-foreground">
@@ -154,7 +154,7 @@ export default async function ReviewsPage() {
                         </Link>
                       </TableCell>
                       <TableCell>
-                        <p className="text-sm text-muted-foreground truncate max-w-[140px]">
+                        <p className="text-sm text-muted-foreground truncate max-w-35">
                           {review.repository.fullName}
                         </p>
                       </TableCell>
