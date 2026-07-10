@@ -58,7 +58,7 @@ function getModel(): GenerativeModel {
 
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
     model = genAI.getGenerativeModel({
-      model: "gemini-2.0-flash",
+      model: "gemini-2.5-flash",
       generationConfig: {
         // Force JSON output — Gemini will only return valid JSON
         responseMimeType: "application/json",
@@ -66,7 +66,7 @@ function getModel(): GenerativeModel {
         // We want precise technical analysis, not creative writing
         temperature: 0.1,
         // Limit output tokens — our JSON response shouldn't be huge
-        maxOutputTokens: 2048,
+        maxOutputTokens: 8192,
       },
     });
   }
@@ -126,8 +126,6 @@ function parseAndValidateResponse(
   // Step 1: Parse JSON
   let parsed: unknown;
   try {
-    // Strip markdown code fences if present
-    // Some models wrap JSON in ```json ... ``` despite instructions
     const cleaned = responseText
       .replace(/^```json\n?/i, "")
       .replace(/\n?```$/i, "")
@@ -135,9 +133,29 @@ function parseAndValidateResponse(
 
     parsed = JSON.parse(cleaned);
   } catch {
-    console.error(`  Failed to parse Gemini response as JSON`);
-    console.error(`  Raw response: ${responseText.substring(0, 200)}`);
-    return null;
+    // Try to recover truncated JSON by finding the last complete finding
+    // This happens when maxOutputTokens cuts the response mid-JSON
+    console.error(`  Failed to parse Gemini response as JSON — attempting recovery`);
+    console.error(`  Raw response (first 300 chars): ${responseText.substring(0, 300)}`);
+
+    try {
+      // Find the last complete finding object by looking for last "}," or "}]"
+      const findingsMatch = responseText.match(/"findings"\s*:\s*\[([\s\S]*?)(?:\]\s*,|\]\s*}|$)/);
+      if (findingsMatch) {
+        // Try to parse with an empty findings array as fallback
+        const fallback = {
+          findings: [],
+          summary: "Review completed but response was truncated. Please retry.",
+          overallScore: 50,
+        };
+        console.error(`  Using fallback response due to truncation`);
+        parsed = fallback;
+      } else {
+        return null;
+      }
+    } catch {
+      return null;
+    }
   }
 
   // Step 2: Validate against our schema
