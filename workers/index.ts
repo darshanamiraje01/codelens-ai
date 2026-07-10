@@ -13,11 +13,13 @@
 import * as dotenv from "dotenv";
 import * as path from "path";
 
-// Load environment variables BEFORE importing anything that uses them
-// The path must be absolute to work regardless of where the script is run from
-dotenv.config({
-  path: path.resolve(process.cwd(), ".env.local"),
-});
+// Only load .env.local in development
+// In production (Render), env vars are injected by the platform
+if (process.env.NODE_ENV !== "production") {
+  dotenv.config({
+    path: path.resolve(process.cwd(), ".env.local"),
+  });
+}
 
 import { createReviewWorker } from "@/lib/queue/workers/review.worker";
 

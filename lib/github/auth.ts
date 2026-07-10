@@ -12,6 +12,15 @@ import path from "node:path";
 const tokenCache = new Map<number, { token: string; expiresAt: Date }>();
 
 function getPrivateKey(): string {
+  // In production, the private key is stored as an environment variable
+  // (Render doesn't have a persistent file system for secrets)
+  if (process.env.GITHUB_APP_PRIVATE_KEY) {
+    // Replace literal \n with actual newlines
+    // (environment variables can't contain real newlines)
+    return process.env.GITHUB_APP_PRIVATE_KEY.replace(/\\n/g, "\n");
+  }
+
+  // In development, read from file
   const privateKeyPath = path.resolve(
     process.cwd(),
     process.env.GITHUB_APP_PRIVATE_KEY_PATH ??
@@ -20,7 +29,7 @@ function getPrivateKey(): string {
 
   if (!fs.existsSync(privateKeyPath)) {
     throw new Error(
-      `GitHub App private key not found at: ${privateKeyPath}`
+      `GitHub App private key not found. Set GITHUB_APP_PRIVATE_KEY env var or provide key file at: ${privateKeyPath}`
     );
   }
 
